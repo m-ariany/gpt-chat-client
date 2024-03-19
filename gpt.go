@@ -2,9 +2,7 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io"
 	"log"
 	"strings"
 	"sync"
@@ -31,6 +29,10 @@ type Client struct {
 
 // Create a new chat client
 func NewClient(cnf ClientConfig) (*Client, error) {
+	if len(cnf.ApiKey) == 0 || len(cnf.ApiUrl) == 0 || len(cnf.Model) == 0 {
+		return nil, fmt.Errorf("the ApiKey, ApiUrl and Model must be present")
+	}
+
 	clientConfig := ai.DefaultConfig(cnf.ApiKey)
 	clientConfig.BaseURL = cnf.ApiUrl
 	tokenizer, err := newTokenzier()
@@ -169,10 +171,6 @@ func (c *Client) PromptStream(ctx context.Context, question string) <-chan Strea
 		sb := strings.Builder{}
 		for {
 			data, err := stream.Recv()
-			if errors.Is(err, io.EOF) {
-				break
-			}
-
 			if err != nil {
 				ch <- Stream{Err: err}
 				break
@@ -181,19 +179,14 @@ func (c *Client) PromptStream(ctx context.Context, question string) <-chan Strea
 			chunk := data.Choices[0].Delta.Content
 			select {
 			case ch <- Stream{Chunk: chunk}:
-			case <-time.After(time.Second * 5):
-				// do not return or break
+			case <-ctx.Done():
+				// do not return or break as the next stream.Recv() will return error and exit the loop
 			}
 
 			sb.WriteString(chunk)
 		}
 
-		response := sb.String()
-		if len(response) == 0 {
-			return
-		}
-
-		c.postResponse(response)
+		c.postResponse(sb.String())
 	}()
 
 	return ch
@@ -299,6 +292,10 @@ func (c *Client) trimHistoryToMatchMessageLimit() {
 }
 
 func (c *Client) postResponse(r string) {
+	if len(r) == 0 {
+		return
+	}
+
 	if c.memorizeAssistantMessages {
 		c.history = append(c.history, ai.ChatCompletionMessage{
 			Role:    ai.ChatMessageRoleAssistant,
