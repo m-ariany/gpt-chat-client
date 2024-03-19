@@ -29,12 +29,17 @@ type Client struct {
 
 // Create a new chat client
 func NewClient(cnf ClientConfig) (*Client, error) {
-	if len(cnf.ApiKey) == 0 || len(cnf.ApiUrl) == 0 || len(cnf.Model) == 0 {
-		return nil, fmt.Errorf("the ApiKey, ApiUrl and Model must be present")
+	if len(cnf.ApiKey) == 0 {
+		return nil, fmt.Errorf("ApiKey must be present")
 	}
 
 	clientConfig := ai.DefaultConfig(cnf.ApiKey)
-	clientConfig.BaseURL = cnf.ApiUrl
+	if len(cnf.ApiUrl) > 0 {
+		clientConfig.BaseURL = cnf.ApiUrl
+	} else {
+		clientConfig.BaseURL = "https://api.openai.com/v1"
+	}
+
 	tokenizer, err := newTokenzier()
 	if err != nil {
 		return nil, err
@@ -53,19 +58,25 @@ func NewClient(cnf ClientConfig) (*Client, error) {
 		mu:                        sync.Mutex{},
 	}
 
-	c.applyConfig(cnf)
+	c.applyConfig(cnf, true)
 
 	return c, nil
 }
 
-func (c *Client) applyConfig(config ClientConfig) {
+func (c *Client) applyConfig(config ClientConfig, normalize bool) {
 
 	if len(config.Model) > 0 {
 		c.model = config.Model
+	} else if normalize {
+		c.model = "gpt-3.5-turbo"
 	}
+
 	if config.ApiTimeout > 0 {
 		c.apiTimeout = config.ApiTimeout
+	} else if normalize {
+		c.apiTimeout = time.Minute * 2
 	}
+
 	if config.Temperature != nil {
 		// doc: https://github.com/sashabaranov/go-openai#frequently-asked-questions
 		if *config.Temperature == 0 {
@@ -114,7 +125,7 @@ func (c *Client) Clone() *Client {
 // This method enables the modification of selected parameters from the source client's configuration.
 func (c *Client) CloneWithConfig(config ClientConfig) *Client {
 	cc := c.Clone()
-	cc.applyConfig(config)
+	cc.applyConfig(config, false)
 	return cc
 }
 
