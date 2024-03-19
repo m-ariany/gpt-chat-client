@@ -109,7 +109,9 @@ func (c *Client) Clone() *Client {
 	}
 }
 
-// Clone a new chat client with an empty history and defined ClientConfig
+// CloneWithConfig creates a new chat client instance with an empty history,
+// inheriting configurations from the source client while allowing overrides through the specified ClientConfig.
+// This method enables the modification of selected parameters from the source client's configuration.
 func (c *Client) CloneWithConfig(config ClientConfig) *Client {
 	cc := c.Clone()
 	cc.applyConfig(config)
