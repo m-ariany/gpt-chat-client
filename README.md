@@ -16,17 +16,17 @@ To create a new chat client, you can use the `NewClient` function. It requires a
 
 ```go
 import (
-    "github.com/your/package/path"
+   gpt "github.com/m-ariany/gpt-chat-client"
 )
 
-config := ClientConfig{
+config := gpt.ClientConfig{
     ApiKey:     "your_openai_api_key",
     ApiUrl:     "https://api.openai.com",
-    Model:      "gtp-4-turbo",
+    Model:      "gpt-4-turbo",
     ApiTimeout: time.Second * 30, // optional: specify API timeout
 }
 
-client, err := NewClient(config)
+client, err := gpt.NewClient(config)
 if err != nil {
     // handle error
 }
