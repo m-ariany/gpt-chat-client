@@ -21,7 +21,7 @@ import (
 
 config := gpt.ClientConfig{
     ApiKey:     "your_openai_api_key",
-    ApiUrl:     "https://api.openai.com",
+    ApiUrl:     "https://api.openai.com/v1",
     Model:      "gpt-4-turbo",
     ApiTimeout: time.Second * 30, // optional: specify API timeout
 }
