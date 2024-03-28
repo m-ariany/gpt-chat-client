@@ -44,5 +44,17 @@ type (
 
 		// MemorizeAssistantMessages indicates whether the client should remember assistant messages in the conversation history.
 		MemorizeAssistantMessages *bool
+
+		// ModeratePromptMessage indicates whether the client should check the prompt message agains the moderation endpoint.
+		ModeratePromptMessage *bool
+
+		// ModerateResponse indicates whether the client should check the response against the moderation endpoint.
+		ModerateResponse *bool
+
+		// MaxRetryDelay indicates how long to delay between retries in API calls.
+		MaxRetryDelay *time.Duration
+
+		// MaxRetries indicates the maximum number of retries to be attempted for API calls.
+		MaxRetries *int
 	}
 )

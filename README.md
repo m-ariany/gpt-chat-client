@@ -70,6 +70,36 @@ for response := range stream {
 }
 ```
 
+### Enable moderation on the user input or model response
+
+You can set the `ModeratePromptMessage` or `ModerateResponse` flags to use OpenAI moderation endpoint on the user's input or model's output:
+
+```go
+
+import (
+    gpt "github.com/m-ariany/gpt-chat-client"
+)
+
+...
+
+config := gpt.ClientConfig{
+     // other configurations
+     ...
+
+     // Set moderation flags
+     ModeratePromptMessage: true
+     ModerateResponse: true
+}
+
+client, _ := gpt.NewClient(config)
+
+response, err := client.Prompt(ctx, "You are a fucking asshole!")
+
+if err == gpt.ErrModerationUserInput {
+    fmt.Println("User input is potentially harmful!")
+}
+```
+
 ### Importing and Exporting History
 
 You can import and export conversation history using the `ImportHistory` and `ExportHistory` functions, respectively:

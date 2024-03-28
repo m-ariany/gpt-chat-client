@@ -9,28 +9,29 @@ import (
 )
 
 type retryHandler struct {
-	rndMu               sync.Mutex
-	maxDelay, maxJitter time.Duration
-	maxRetry            int
+	rndMu    sync.Mutex
+	maxDelay time.Duration
+	maxRetry int
 }
 
-func newRetryHandler(MaxDelay, MaxJitter time.Duration, maxRetry int) *retryHandler {
+func newRetryHandler(maxDelay time.Duration, maxRetry int) *retryHandler {
 	return &retryHandler{
-		rndMu:     sync.Mutex{},
-		maxDelay:  MaxDelay,
-		maxJitter: MaxJitter,
-		maxRetry:  maxRetry,
+		rndMu:    sync.Mutex{},
+		maxDelay: maxDelay,
+		maxRetry: maxRetry,
 	}
 }
 
 type CallFunc func() error
 
 func (b *retryHandler) Do(c CallFunc) {
-	for i := 1; i < b.maxRetry+1; i++ {
+	for i := 0; i < b.maxRetry+1; i++ {
 		if err := c(); err == nil {
 			return
 		}
-		b.backoff(i)
+		if i < b.maxRetry {
+			b.backoff(i)
+		}
 	}
 }
 
@@ -38,10 +39,7 @@ func (b *retryHandler) Do(c CallFunc) {
 func (b *retryHandler) backoff(retryCount int) {
 
 	if b.maxDelay == 0 {
-		b.maxDelay = 5000 * time.Millisecond
-	}
-	if b.maxJitter == 0 {
-		b.maxJitter = 2000 * time.Millisecond
+		return
 	}
 
 	b.rndMu.Lock()

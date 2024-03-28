@@ -24,6 +24,10 @@ type Client struct {
 	memoryMessageSize         int
 	memorizeAssistantMessages bool
 	totalConsumedTokens       int
+	moderatePromptMessage     bool
+	moderateResponse          bool
+	maxRetryDelay             time.Duration
+	maxRetries                int
 	mu                        sync.Mutex
 }
 
@@ -100,6 +104,18 @@ func (c *Client) applyConfig(config ClientConfig, normalize bool) {
 	if config.MemorizeAssistantMessages != nil {
 		c.memorizeAssistantMessages = *config.MemorizeAssistantMessages
 	}
+	if config.ModeratePromptMessage != nil {
+		c.moderatePromptMessage = *config.ModeratePromptMessage
+	}
+	if config.ModerateResponse != nil {
+		c.moderateResponse = *config.ModerateResponse
+	}
+	if config.MaxRetries != nil {
+		c.maxRetries = *config.MaxRetries
+	}
+	if config.MaxRetryDelay != nil {
+		c.maxRetryDelay = *config.MaxRetryDelay
+	}
 }
 
 // Clone a new chat client with an empty history
@@ -116,6 +132,10 @@ func (c *Client) Clone() *Client {
 		memoryTokenSize:           c.memoryTokenSize,
 		memoryMessageSize:         c.memoryMessageSize,
 		memorizeAssistantMessages: c.memorizeAssistantMessages,
+		moderatePromptMessage:     c.moderatePromptMessage,
+		moderateResponse:          c.moderateResponse,
+		maxRetryDelay:             c.maxRetryDelay,
+		maxRetries:                c.maxRetries,
 		mu:                        sync.Mutex{},
 	}
 }
@@ -144,30 +164,77 @@ func (c *Client) Instruct(instruction string) {
 	}
 }
 
-// Prompt sends a message to the model to get a response
+// Prompt sends a prompt to the OpenAI API for generating a response.
+// It returns the generated response or an error.
+// Errors returned can be of types ErrModerationUserInput or ErrModerationModelOutput
+// if moderation flags are enabled and moderation fails, otherwise, it can be other types of errors from the underlying operations.
 func (c *Client) Prompt(ctx context.Context, prompt string) (string, error) {
-	retryHandler := newRetryHandler(time.Second*20, time.Second*5, 5)
+
+	if c.moderatePromptMessage {
+		err := c.moderateInput(ctx, prompt)
+		if err == ErrModeration {
+			return "", ErrModerationUserInput
+		}
+		if err != nil {
+			return "", err
+		}
+	}
+
+	retryHandler := newRetryHandler(c.maxRetryDelay, c.maxRetries)
 	var err error
-	var data string
+	var response string
 
 	retryHandler.Do(func() error {
-		data, err = c.prompt(ctx, prompt)
+		response, err = c.prompt(ctx, prompt)
 		if err != nil {
 			log.Printf("retry calling openai %v", err)
 		}
 		return err
 	})
 
-	return data, err
+	if err != nil {
+		return "", err
+	}
+
+	if c.moderateResponse {
+		err := c.moderateInput(ctx, response)
+		if err == ErrModeration {
+			return "", ErrModerationModelOutput
+		}
+		if err != nil {
+			return "", err
+		}
+	}
+
+	return response, nil
 }
 
-// Prompt sends a message to the model to get a stream response
+// PromptStream sends a prompt to the OpenAI API for generating a response,
+// and returns a channel of Stream objects containing response chunks or errors.
+// The Chunk field in Stream struct contains response chunks,
+// and the Err field indicates any errors encountered during the streaming process.
+// Errors returned can be of types ErrModerationUserInput if moderation flags are enabled and moderation fails,
+// otherwise, it can be other types of errors from the underlying operations.
+//
+// Since respose is returned as stream to the client, no moderation on the response can be done in this level.
 func (c *Client) PromptStream(ctx context.Context, question string) <-chan Stream {
 
 	ch := make(chan Stream)
 
 	go func() {
 		defer close(ch)
+
+		if c.moderatePromptMessage {
+			err := c.moderateInput(ctx, question)
+			if err == ErrModeration {
+				ch <- Stream{Err: ErrModerationUserInput}
+				return
+			}
+			if err != nil {
+				ch <- Stream{Err: err}
+				return
+			}
+		}
 
 		req := c.newChatCompletionRequest(question, true)
 		ctx, cancel := context.WithTimeout(ctx, c.apiTimeout)
@@ -366,4 +433,25 @@ func (c *Client) billConsumedTokens() {
 	c.mu.Lock()
 	c.totalConsumedTokens += numTokens
 	c.mu.Unlock()
+}
+
+// moderateInput sends the input string to the OpenAI API for moderation.
+// It returns an error if there's an issue with the API call or if the input is flagged for moderation.
+// Otherwise, it returns nil.
+func (c *Client) moderateInput(ctx context.Context, input string) error {
+
+	result, err := c.client.Moderations(ctx, ai.ModerationRequest{
+		Input: input,
+		Model: ai.ModerationTextStable,
+	})
+
+	if err != nil {
+		return err
+	}
+
+	if result.Results[0].Flagged {
+		return ErrModeration
+	}
+
+	return nil
 }
