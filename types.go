@@ -32,6 +32,9 @@ type (
 		// Temperature controls the randomness of the model's responses. Higher values lead to more random responses.
 		Temperature *float32
 
+		// The maximum number of tokens to generate
+		MaxTokens int
+
 		// TopP is the nucleus sampling probability threshold, controlling the randomness of token generation.
 		TopP *float32 `json:"top_p,omitempty"`
 

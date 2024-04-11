@@ -64,7 +64,7 @@ client.InstructWithLengthFix("Your very long instruction message")
 You can send a prompt to the model to get a response using the `Prompt` function:
 
 ```go
-response, err := client.Prompt(ctx, "Your prompt message", 1024)
+response, err := client.Prompt(ctx, "Your prompt message")
 if err != nil {
     // handle error
 }
@@ -75,7 +75,7 @@ if err != nil {
 To get a stream of responses from the model, you can use the `PromptStream` function:
 
 ```go
-stream := client.PromptStream(ctx, "Your prompt message", 1024)
+stream := client.PromptStream(ctx, "Your prompt message")
 
 for response := range stream {
     if response.Err != nil {

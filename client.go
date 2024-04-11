@@ -17,6 +17,7 @@ type Client struct {
 	apiTimeout            time.Duration
 	temperature           float32
 	topP                  float32
+	maxTokens             int
 	presencePenalty       float32
 	frequencyPenalty      float32
 	logitBias             map[string]int
@@ -90,6 +91,8 @@ func (c *Client) applyConfig(config ClientConfig, normalize bool) {
 	} else if normalize {
 		c.topP = 1
 	}
+
+	c.maxTokens = config.MaxTokens
 
 	c.presencePenalty = config.PresencePenalty
 
@@ -197,7 +200,7 @@ func (c *Client) InstructWithLengthFix(instruction string) {
 // It returns the generated response or an error.
 // Errors returned can be of types ErrModerationUserInput or ErrModerationModelOutput
 // if moderation flags are enabled and moderation fails, otherwise, it can be other types of errors from the underlying operations.
-func (c *Client) Prompt(ctx context.Context, prompt string, maxTokens int) (string, error) {
+func (c *Client) Prompt(ctx context.Context, prompt string) (string, error) {
 
 	if c.moderatePromptMessage {
 		err := c.moderateInput(ctx, prompt)
@@ -214,7 +217,7 @@ func (c *Client) Prompt(ctx context.Context, prompt string, maxTokens int) (stri
 	var response string
 
 	retryHandler.Do(func() error {
-		response, err = c.prompt(ctx, prompt, maxTokens)
+		response, err = c.prompt(ctx, prompt)
 		if err != nil {
 			log.Printf("retry calling openai %v", err)
 		}
@@ -246,7 +249,7 @@ func (c *Client) Prompt(ctx context.Context, prompt string, maxTokens int) (stri
 // otherwise, it can be other types of errors from the underlying operations.
 //
 // Since respose is returned as stream to the client, no moderation on the response can be done in this level.
-func (c *Client) PromptStream(ctx context.Context, question string, maxTokens int) <-chan Stream {
+func (c *Client) PromptStream(ctx context.Context, question string) <-chan Stream {
 
 	ch := make(chan Stream)
 
@@ -265,7 +268,7 @@ func (c *Client) PromptStream(ctx context.Context, question string, maxTokens in
 			}
 		}
 
-		req := c.newChatCompletionRequest(question, maxTokens, true)
+		req := c.newChatCompletionRequest(question, true)
 		ctx, cancel := context.WithTimeout(ctx, c.apiTimeout)
 		defer cancel()
 
@@ -308,11 +311,8 @@ func (c *Client) ImportHistory(history History) {
 }
 
 // Export current history of the client
-func (c *Client) ExportHistory(includeSystemMsg bool) History {
-	if includeSystemMsg {
-		return c.history
-	}
-	return c.history[1:]
+func (c *Client) ExportHistory() History {
+	return c.history
 }
 
 // Get total number of input and output tokens consumed by the client
@@ -320,9 +320,9 @@ func (c *Client) TotalConsumedTokens() int {
 	return c.totalConsumedTokens
 }
 
-func (c *Client) prompt(ctx context.Context, question string, maxTokens int) (string, error) {
+func (c *Client) prompt(ctx context.Context, question string) (string, error) {
 
-	req := c.newChatCompletionRequest(question, maxTokens, false)
+	req := c.newChatCompletionRequest(question, false)
 	ctx, cancel := context.WithTimeout(ctx, c.apiTimeout)
 	defer cancel()
 	resp, err := c.client.CreateChatCompletion(ctx, req)
@@ -336,7 +336,7 @@ func (c *Client) prompt(ctx context.Context, question string, maxTokens int) (st
 	return data, nil
 }
 
-func (c *Client) newChatCompletionRequest(question string, maxTokens int, stream bool) ai.ChatCompletionRequest {
+func (c *Client) newChatCompletionRequest(question string, stream bool) ai.ChatCompletionRequest {
 
 	/*
 		Ref: https://platform.openai.com/docs/guides/chat/introduction
@@ -350,13 +350,18 @@ func (c *Client) newChatCompletionRequest(question string, maxTokens int, stream
 
 	c.trimHistory()
 
-	return ai.ChatCompletionRequest{
+	request := ai.ChatCompletionRequest{
 		Model:       c.model,
 		Messages:    c.history,
 		Temperature: c.temperature,
-		MaxTokens:   maxTokens,
 		Stream:      stream,
 	}
+
+	if c.maxTokens > 0 {
+		request.MaxTokens = c.maxTokens
+	}
+
+	return request
 }
 
 // Trim history to fit the maximum number of tokens or messages allowed.
@@ -375,16 +380,36 @@ func (c *Client) trimHistory() {
 }
 
 func (c *Client) trimHistoryToMatchTokenLimit(limit int) error {
+	// there is only a system message
+	if len(c.history) == 1 {
+		return nil
+	}
+
 	// exclude instruction from the operation
-	// shave the oldest messages first
-	historyAsString, err := c.history.ToString()
+	historyToString := func() (string, error) {
+		return c.history[1:].ToString()
+	}
+
+	historyAsString, err := historyToString()
 	if err != nil {
 		return err
 	}
 
 	for c.tokenizer.CountTokens(historyAsString) > limit {
+		// only system message and one additional message is remained.
+		// delete the additional message.
+		if len(c.history) == 2 {
+			c.history = c.history[:1]
+			break
+		}
+
+		// shave the oldest messages first
 		copy(c.history[1:], c.history[2:])
 		c.history = c.history[:len(c.history)-1]
+
+		if historyAsString, err = historyToString(); err != nil {
+			return err
+		}
 	}
 
 	return nil
