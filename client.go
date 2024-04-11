@@ -5,33 +5,30 @@ import (
 	"fmt"
 	"log"
 	"strings"
-	"sync"
 	"time"
 
 	ai "github.com/sashabaranov/go-openai"
 )
 
 type Client struct {
-	client                    *ai.Client
-	history                   History
-	model                     string
-	apiTimeout                time.Duration
-	temperature               float32
-	tokenizer                 tokenizer
-	limitMemoryByToken        bool
-	limitMemoryByMessage      bool
-	memoryTokenSize           int
-	memoryMessageSize         int
-	memorizeAssistantMessages bool
-	totalConsumedTokens       int
-	moderatePromptMessage     bool
-	moderateResponse          bool
-	maxRetryDelay             time.Duration
-	maxRetries                int
-	mu                        sync.Mutex
+	client                *ai.Client
+	history               History
+	model                 string
+	apiTimeout            time.Duration
+	temperature           float32
+	topP                  float32
+	presencePenalty       float32
+	frequencyPenalty      float32
+	logitBias             map[string]int
+	tokenizer             tokenizer
+	memoryTokenSize       *int
+	memoryMessageSize     *int
+	totalConsumedTokens   int
+	moderatePromptMessage bool
+	moderateResponse      bool
 }
 
-// Create a new chat client
+// NewClient instantiates a new chat client. Note that clients are not concurrency-safe. For concurrent usage, it's recommended to create separate client instances.
 func NewClient(cnf ClientConfig) (*Client, error) {
 	if len(cnf.ApiKey) == 0 {
 		return nil, fmt.Errorf("ApiKey must be present")
@@ -54,12 +51,10 @@ func NewClient(cnf ClientConfig) (*Client, error) {
 		// Typically, a conversation is formatted with a system message first,
 		// followed by alternating user and assistant messages.
 		// Ref: https://platform.openai.com/docs/guides/chat/introduction
-		history:                   History{},
-		model:                     cnf.Model,
-		apiTimeout:                cnf.ApiTimeout,
-		memorizeAssistantMessages: true,
-		tokenizer:                 tokenizer,
-		mu:                        sync.Mutex{},
+		history:    History{},
+		model:      cnf.Model,
+		apiTimeout: cnf.ApiTimeout,
+		tokenizer:  tokenizer,
 	}
 
 	c.applyConfig(cnf, true)
@@ -89,54 +84,57 @@ func (c *Client) applyConfig(config ClientConfig, normalize bool) {
 			c.temperature = *config.Temperature
 		}
 	}
-	if config.LimitMemoryByMessage != nil {
-		c.limitMemoryByMessage = *config.LimitMemoryByMessage
+
+	if config.TopP != nil {
+		c.topP = *config.TopP
+	} else if normalize {
+		c.topP = 1
 	}
-	if config.LimitMemoryByToken != nil {
-		c.limitMemoryByToken = *config.LimitMemoryByToken
+
+	c.presencePenalty = config.PresencePenalty
+
+	c.frequencyPenalty = config.FrequencyPenalty
+
+	if len(config.LogitBias) > 0 {
+		c.logitBias = config.LogitBias
+	} else if normalize {
+		c.logitBias = make(map[string]int)
 	}
+
 	if config.MemoryMessageSize != nil {
-		c.memoryMessageSize = *config.MemoryMessageSize
+		c.memoryMessageSize = config.MemoryMessageSize
 	}
+
 	if config.MemoryTokenSize != nil {
-		c.memoryTokenSize = *config.MemoryTokenSize
+		c.memoryTokenSize = config.MemoryTokenSize
 	}
-	if config.MemorizeAssistantMessages != nil {
-		c.memorizeAssistantMessages = *config.MemorizeAssistantMessages
-	}
+
 	if config.ModeratePromptMessage != nil {
 		c.moderatePromptMessage = *config.ModeratePromptMessage
 	}
+
 	if config.ModerateResponse != nil {
 		c.moderateResponse = *config.ModerateResponse
-	}
-	if config.MaxRetries != nil {
-		c.maxRetries = *config.MaxRetries
-	}
-	if config.MaxRetryDelay != nil {
-		c.maxRetryDelay = *config.MaxRetryDelay
 	}
 }
 
 // Clone a new chat client with an empty history
 func (c *Client) Clone() *Client {
 	return &Client{
-		client:                    c.client,
-		history:                   History{},
-		model:                     c.model,
-		apiTimeout:                c.apiTimeout,
-		temperature:               c.temperature,
-		tokenizer:                 c.tokenizer,
-		limitMemoryByToken:        c.limitMemoryByToken,
-		limitMemoryByMessage:      c.limitMemoryByMessage,
-		memoryTokenSize:           c.memoryTokenSize,
-		memoryMessageSize:         c.memoryMessageSize,
-		memorizeAssistantMessages: c.memorizeAssistantMessages,
-		moderatePromptMessage:     c.moderatePromptMessage,
-		moderateResponse:          c.moderateResponse,
-		maxRetryDelay:             c.maxRetryDelay,
-		maxRetries:                c.maxRetries,
-		mu:                        sync.Mutex{},
+		client:                c.client,
+		history:               History{},
+		model:                 c.model,
+		apiTimeout:            c.apiTimeout,
+		temperature:           c.temperature,
+		topP:                  c.topP,
+		presencePenalty:       c.presencePenalty,
+		frequencyPenalty:      c.frequencyPenalty,
+		logitBias:             c.logitBias,
+		tokenizer:             c.tokenizer,
+		memoryTokenSize:       c.memoryTokenSize,
+		memoryMessageSize:     c.memoryMessageSize,
+		moderatePromptMessage: c.moderatePromptMessage,
+		moderateResponse:      c.moderateResponse,
 	}
 }
 
@@ -149,8 +147,14 @@ func (c *Client) CloneWithConfig(config ClientConfig) *Client {
 	return cc
 }
 
-// Instruct the model by setting the system message
-func (c *Client) Instruct(instruction string) {
+// Instruct sends an instruction to the client, providing system message.
+// If length of the instruction exceeds the allowed context length of the underlying model, it returns an error.
+func (c *Client) Instruct(instruction string) error {
+
+	if c.tokenizer.CountTokens(instruction) > getModel(c.model).MaxInstructionLength() {
+		return fmt.Errorf("max length of instruction is %d", getModel(c.model).MaxInstructionLength())
+	}
+
 	if len(c.history) == 0 { // insert
 		c.history = append(c.history, ai.ChatCompletionMessage{
 			Role:    ai.ChatMessageRoleSystem,
@@ -162,13 +166,15 @@ func (c *Client) Instruct(instruction string) {
 			Content: instruction,
 		}
 	}
+
+	return nil
 }
 
 // Prompt sends a prompt to the OpenAI API for generating a response.
 // It returns the generated response or an error.
 // Errors returned can be of types ErrModerationUserInput or ErrModerationModelOutput
 // if moderation flags are enabled and moderation fails, otherwise, it can be other types of errors from the underlying operations.
-func (c *Client) Prompt(ctx context.Context, prompt string) (string, error) {
+func (c *Client) Prompt(ctx context.Context, prompt string, maxTokens int) (string, error) {
 
 	if c.moderatePromptMessage {
 		err := c.moderateInput(ctx, prompt)
@@ -180,12 +186,12 @@ func (c *Client) Prompt(ctx context.Context, prompt string) (string, error) {
 		}
 	}
 
-	retryHandler := newRetryHandler(c.maxRetryDelay, c.maxRetries)
+	retryHandler := newRetryHandler(time.Second*5, 5)
 	var err error
 	var response string
 
 	retryHandler.Do(func() error {
-		response, err = c.prompt(ctx, prompt)
+		response, err = c.prompt(ctx, prompt, maxTokens)
 		if err != nil {
 			log.Printf("retry calling openai %v", err)
 		}
@@ -217,7 +223,7 @@ func (c *Client) Prompt(ctx context.Context, prompt string) (string, error) {
 // otherwise, it can be other types of errors from the underlying operations.
 //
 // Since respose is returned as stream to the client, no moderation on the response can be done in this level.
-func (c *Client) PromptStream(ctx context.Context, question string) <-chan Stream {
+func (c *Client) PromptStream(ctx context.Context, question string, maxTokens int) <-chan Stream {
 
 	ch := make(chan Stream)
 
@@ -236,7 +242,7 @@ func (c *Client) PromptStream(ctx context.Context, question string) <-chan Strea
 			}
 		}
 
-		req := c.newChatCompletionRequest(question, true)
+		req := c.newChatCompletionRequest(question, maxTokens, true)
 		ctx, cancel := context.WithTimeout(ctx, c.apiTimeout)
 		defer cancel()
 
@@ -266,7 +272,7 @@ func (c *Client) PromptStream(ctx context.Context, question string) <-chan Strea
 			sb.WriteString(chunk)
 		}
 
-		c.postResponse(sb.String())
+		c.postStreamResponse(sb.String())
 	}()
 
 	return ch
@@ -288,15 +294,12 @@ func (c *Client) ExportHistory(includeSystemMsg bool) History {
 
 // Get total number of input and output tokens consumed by the client
 func (c *Client) TotalConsumedTokens() int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	return c.totalConsumedTokens
 }
 
-func (c *Client) prompt(ctx context.Context, question string) (string, error) {
+func (c *Client) prompt(ctx context.Context, question string, maxTokens int) (string, error) {
 
-	req := c.newChatCompletionRequest(question, false)
+	req := c.newChatCompletionRequest(question, maxTokens, false)
 	ctx, cancel := context.WithTimeout(ctx, c.apiTimeout)
 	defer cancel()
 	resp, err := c.client.CreateChatCompletion(ctx, req)
@@ -306,11 +309,11 @@ func (c *Client) prompt(ctx context.Context, question string) (string, error) {
 	}
 
 	data := resp.Choices[0].Message.Content
-	c.postResponse(data)
+	c.billConsumedTokens(resp.Usage.TotalTokens)
 	return data, nil
 }
 
-func (c *Client) newChatCompletionRequest(question string, stream bool) ai.ChatCompletionRequest {
+func (c *Client) newChatCompletionRequest(question string, maxTokens int, stream bool) ai.ChatCompletionRequest {
 
 	/*
 		Ref: https://platform.openai.com/docs/guides/chat/introduction
@@ -322,30 +325,33 @@ func (c *Client) newChatCompletionRequest(question string, stream bool) ai.ChatC
 		Content: question,
 	})
 
-	if c.limitMemoryByMessage || c.limitMemoryByToken {
-		c.trimHistory()
-	}
+	c.trimHistory()
 
 	return ai.ChatCompletionRequest{
 		Model:       c.model,
 		Messages:    c.history,
 		Temperature: c.temperature,
+		MaxTokens:   maxTokens,
 		Stream:      stream,
 	}
 }
 
 // Trim history to fit the maximum number of tokens or messages allowed.
 func (c *Client) trimHistory() {
-	// limitMemoryByToken has priority over limitMemoryByMessage.
-	// if both are given, only apply limitMemoryByToken
-	if c.limitMemoryByToken {
-		c.trimHistoryToMatchTokenLimit()
-	} else if c.limitMemoryByMessage {
+
+	if c.memoryTokenSize != nil {
+		c.trimHistoryToMatchTokenLimit(*c.memoryTokenSize)
+	}
+
+	if c.memoryMessageSize != nil {
 		c.trimHistoryToMatchMessageLimit()
 	}
+
+	// to make sure that the remained context does not exceed the allowed model's context length
+	c.trimHistoryToMatchTokenLimit(getModel(c.model).ContextLength())
 }
 
-func (c *Client) trimHistoryToMatchTokenLimit() error {
+func (c *Client) trimHistoryToMatchTokenLimit(limit int) error {
 	// exclude instruction from the operation
 	// shave the oldest messages first
 	historyAsString, err := c.history.ToString()
@@ -353,7 +359,7 @@ func (c *Client) trimHistoryToMatchTokenLimit() error {
 		return err
 	}
 
-	for c.tokenizer.CountTokens(historyAsString) > c.memoryTokenSize {
+	for c.tokenizer.CountTokens(historyAsString) > limit {
 		copy(c.history[1:], c.history[2:])
 		c.history = c.history[:len(c.history)-1]
 	}
@@ -362,7 +368,7 @@ func (c *Client) trimHistoryToMatchTokenLimit() error {
 }
 
 func (c *Client) trimHistoryToMatchMessageLimit() {
-	memorySize := c.memoryMessageSize
+	memorySize := *c.memoryMessageSize
 	// exclude instruction from the operation
 	if len(c.history)-1 <= memorySize {
 		return
@@ -371,68 +377,26 @@ func (c *Client) trimHistoryToMatchMessageLimit() {
 	c.history = append(c.history[:1], c.history[1+len(c.history)-memorySize:]...)
 }
 
-func (c *Client) postResponse(r string) {
+func (c *Client) postStreamResponse(r string) {
 	if len(r) == 0 {
 		return
 	}
 
-	if c.memorizeAssistantMessages {
-		c.history = append(c.history, ai.ChatCompletionMessage{
-			Role:    ai.ChatMessageRoleAssistant,
-			Content: r,
-		})
-	}
+	c.history = append(c.history, ai.ChatCompletionMessage{
+		Role:    ai.ChatMessageRoleAssistant,
+		Content: r,
+	})
 
-	c.billConsumedTokens()
+	history, err := c.history.ToString()
+	if err != nil {
+		log.Println("failed to bill consumed tokens")
+	}
+	n := c.tokenizer.CountTokens(history)
+	c.billConsumedTokens(n)
 }
 
-// OpenAI Cookbook: https://github.com/openai/openai-cookbook/blob/main/examples/How_to_count_tokens_with_tiktoken.ipynb
-func (c *Client) billConsumedTokens() {
-
-	var tokensPerMessage, tokensPerName int
-	switch c.model {
-	case "gpt-3.5-turbo-0613",
-		"gpt-3.5-turbo-16k-0613",
-		"gpt-4-0314",
-		"gpt-4-32k-0314",
-		"gpt-4-0613",
-		"gpt-4-32k-0613":
-		tokensPerMessage = 3
-		tokensPerName = 1
-	case "gpt-3.5-turbo-0301":
-		tokensPerMessage = 4 // every message follows <|start|>{role/name}\n{content}<|end|>\n
-		tokensPerName = -1   // if there's a name, the role is omitted
-	default:
-		if strings.Contains(c.model, "gpt-3.5-turbo") {
-			log.Println("warning: gpt-3.5-turbo may update over time. Returning num tokens assuming gpt-3.5-turbo-0613.")
-			tokensPerMessage = 3
-			tokensPerName = 1
-		} else if strings.Contains(c.model, "gpt-4") {
-			log.Println("warning: gpt-4 may update over time. Returning num tokens assuming gpt-4-0613.")
-			tokensPerMessage = 3
-			tokensPerName = 1
-		} else {
-			err := fmt.Errorf("num_tokens_from_messages() is not implemented for model %s see https://github.com/openai/openai-python/blob/main/chatml.md for information on how messages are converted to tokens", c.model)
-			log.Println(err)
-			return
-		}
-	}
-
-	var numTokens int
-	for _, message := range c.history {
-		numTokens += tokensPerMessage
-		numTokens += len(c.tokenizer.Encode(message.Content, nil, nil))
-		numTokens += len(c.tokenizer.Encode(message.Role, nil, nil))
-		numTokens += len(c.tokenizer.Encode(message.Name, nil, nil))
-		if message.Name != "" {
-			numTokens += tokensPerName
-		}
-	}
-	numTokens += 3 // every reply is primed with <|start|>assistant<|message|>
-
-	c.mu.Lock()
-	c.totalConsumedTokens += numTokens
-	c.mu.Unlock()
+func (c *Client) billConsumedTokens(n int) {
+	c.totalConsumedTokens += n
 }
 
 // moderateInput sends the input string to the OpenAI API for moderation.

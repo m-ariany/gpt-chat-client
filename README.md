@@ -2,6 +2,14 @@
 
 This Go package provides a client for interacting with OpenAI's chat API. It allows users to interact with various functionalities of OpenAI's chat models, including sending prompts, receiving responses, managing conversation history, and configuring client settings.
 
+## Features:
+
+- Streaming/Non-Streaming Responses: Supports both types of responses.
+- Moderation: Available on user input and model output.
+- Context Size Management: Manage context size via message count or token limit. By default, context will not grow beyond the context window of the underlying model.
+- History Import/Export: Facilitates easy data transfer.
+- Token Consumption Tracking: Returns total consumed tokens per client object.
+
 ## Installation
 
 To use this package, you need to have Go installed. You can install the package using the following command:
@@ -40,7 +48,10 @@ You can clone a client with or without configurations using the `Clone` and `Clo
 You can instruct the model by setting a system message using the `Instruct` function:
 
 ```go
-client.Instruct("Your instruction message")
+err := client.Instruct("Your instruction message")
+if err != nil {
+    fmt.Println(err)
+}
 ```
 
 ### Sending a Prompt
@@ -48,7 +59,7 @@ client.Instruct("Your instruction message")
 You can send a prompt to the model to get a response using the `Prompt` function:
 
 ```go
-response, err := client.Prompt(ctx, "Your prompt message")
+response, err := client.Prompt(ctx, "Your prompt message", 1024)
 if err != nil {
     // handle error
 }
@@ -59,7 +70,7 @@ if err != nil {
 To get a stream of responses from the model, you can use the `PromptStream` function:
 
 ```go
-stream := client.PromptStream(ctx, "Your prompt message")
+stream := client.PromptStream(ctx, "Your prompt message", 1024)
 
 for response := range stream {
     if response.Err != nil {

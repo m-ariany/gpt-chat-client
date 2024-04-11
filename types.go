@@ -3,6 +3,7 @@ package chatclient
 import (
 	"time"
 
+	"github.com/sashabaranov/go-openai"
 	ai "github.com/sashabaranov/go-openai"
 )
 
@@ -15,6 +16,7 @@ type (
 	}
 
 	ClientConfig struct {
+		openai.ChatCompletionRequest
 		// ApiUrl is the URL of the OpenAI API.
 		ApiUrl string
 
@@ -30,11 +32,17 @@ type (
 		// Temperature controls the randomness of the model's responses. Higher values lead to more random responses.
 		Temperature *float32
 
-		// LimitMemoryByToken indicates whether the client should limit memory usage based on the number of tokens.
-		LimitMemoryByToken *bool
+		// TopP is the nucleus sampling probability threshold, controlling the randomness of token generation.
+		TopP *float32 `json:"top_p,omitempty"`
 
-		// LimitMemoryByMessage indicates whether the client should limit memory usage based on the number of messages.
-		LimitMemoryByMessage *bool
+		// PresencePenalty decreases the likelihood of already chosen tokens, controlling repetition in generation.
+		PresencePenalty float32 `json:"presence_penalty,omitempty"`
+
+		// FrequencyPenalty reduces the probability of repeated tokens, decreasing redundancy in the output.
+		FrequencyPenalty float32 `json:"frequency_penalty,omitempty"`
+
+		// LogitBias allows manual adjustment of the probability of specified tokens during generation.
+		LogitBias map[string]int `json:"logit_bias,omitempty"`
 
 		// MemoryTokenSize specifies the maximum number of tokens to remember in the conversation history.
 		MemoryTokenSize *int
@@ -42,19 +50,10 @@ type (
 		// MemoryMessageSize specifies the maximum number of messages to remember in the conversation history.
 		MemoryMessageSize *int
 
-		// MemorizeAssistantMessages indicates whether the client should remember assistant messages in the conversation history.
-		MemorizeAssistantMessages *bool
-
 		// ModeratePromptMessage indicates whether the client should check the prompt message agains the moderation endpoint.
 		ModeratePromptMessage *bool
 
 		// ModerateResponse indicates whether the client should check the response against the moderation endpoint.
 		ModerateResponse *bool
-
-		// MaxRetryDelay indicates how long to delay between retries in API calls.
-		MaxRetryDelay *time.Duration
-
-		// MaxRetries indicates the maximum number of retries to be attempted for API calls.
-		MaxRetries *int
 	}
 )
