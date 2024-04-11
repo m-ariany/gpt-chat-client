@@ -50,8 +50,13 @@ You can instruct the model by setting a system message using the `Instruct` func
 ```go
 err := client.Instruct("Your instruction message")
 if err != nil {
-    fmt.Println(err)
+    fmt.Println(err)  // instruction message is longer than the context window size of the underlying model.
 }
+```
+
+You can call the `InstructWithLengthFix` method to automatically trim the instruction if it exceeds the context window size of the underlying model.
+```go
+client.InstructWithLengthFix("Your very long instruction message")
 ```
 
 ### Sending a Prompt

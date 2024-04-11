@@ -170,6 +170,29 @@ func (c *Client) Instruct(instruction string) error {
 	return nil
 }
 
+// Instruct sends an instruction to the client, providing system message.
+// If length of the instruction exceeds the allowed context length of the underlying model, it trims the instruction to fit.
+func (c *Client) InstructWithLengthFix(instruction string) {
+
+	for c.tokenizer.CountTokens(instruction) > getModel(c.model).MaxInstructionLength() {
+		diffToken := c.tokenizer.CountTokens(instruction) - getModel(c.model).MaxInstructionLength()
+		diffChar := diffToken * 3 // each token is roughly 3 latin characters
+		instruction = instruction[:len(instruction)-diffChar]
+	}
+
+	if len(c.history) == 0 { // insert
+		c.history = append(c.history, ai.ChatCompletionMessage{
+			Role:    ai.ChatMessageRoleSystem,
+			Content: instruction,
+		})
+	} else { // update
+		c.history[0] = ai.ChatCompletionMessage{
+			Role:    ai.ChatMessageRoleSystem,
+			Content: instruction,
+		}
+	}
+}
+
 // Prompt sends a prompt to the OpenAI API for generating a response.
 // It returns the generated response or an error.
 // Errors returned can be of types ErrModerationUserInput or ErrModerationModelOutput
