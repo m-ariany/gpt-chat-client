@@ -4,11 +4,11 @@ This Go package provides a client for interacting with OpenAI's chat API. It all
 
 ## Features:
 
-- Streaming/Non-Streaming Responses: Supports both types of responses.
-- Moderation: Available on user input and model output.
-- Context Size Management: Manage context size via message count or token limit. By default, context will not grow beyond the context window of the underlying model.
-- History Import/Export: Facilitates easy data transfer.
-- Token Consumption Tracking: Returns total consumed tokens per client object.
+- **Streaming/Non-Streaming Responses**: Supports both types of responses.
+- **Moderation**: Available on user input and model output.
+- **Context Size Management**: Manage context size via message count or token limit. By default, context will not grow beyond the context window of the underlying model.
+- **History Import/Export**: Facilitates easy data transfer.
+- **Token Consumption Tracking**: Returns total consumed tokens per client object.
 
 ## Installation
 
