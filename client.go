@@ -10,26 +10,20 @@ import (
 	ai "github.com/sashabaranov/go-openai"
 )
 
+const (
+	apiTimeout = time.Minute
+)
+
 type Client struct {
-	client                *ai.Client
-	history               History
-	model                 string
-	apiTimeout            time.Duration
-	temperature           float32
-	topP                  float32
-	maxTokens             int
-	presencePenalty       float32
-	frequencyPenalty      float32
-	logitBias             map[string]int
-	tokenizer             tokenizer
-	memoryTokenSize       *int
-	memoryMessageSize     *int
-	totalConsumedTokens   int
-	moderatePromptMessage bool
-	moderateResponse      bool
+	client              *ai.Client
+	history             History
+	config              *ClientConfig
+	tokenizer           tokenizer
+	totalConsumedTokens int
 }
 
-// NewClient instantiates a new chat client. Note that clients are not concurrency-safe. For concurrent usage, it's recommended to create separate client instances.
+// NewClient instantiates a new chat client. Note that clients are not concurrency-safe. For concurrent usage,
+// it's recommended to create separate client instances.
 func NewClient(cnf ClientConfig) (*Client, error) {
 	if len(cnf.ApiKey) == 0 {
 		return nil, fmt.Errorf("ApiKey must be present")
@@ -48,96 +42,25 @@ func NewClient(cnf ClientConfig) (*Client, error) {
 	}
 
 	c := &Client{
-		client: ai.NewClientWithConfig(clientConfig),
-		// Typically, a conversation is formatted with a system message first,
-		// followed by alternating user and assistant messages.
-		// Ref: https://platform.openai.com/docs/guides/chat/introduction
-		history:    History{},
-		model:      cnf.Model,
-		apiTimeout: cnf.ApiTimeout,
-		tokenizer:  tokenizer,
+		client:    ai.NewClientWithConfig(clientConfig),
+		history:   History{},
+		config:    &cnf,
+		tokenizer: tokenizer,
 	}
 
-	c.applyConfig(cnf, true)
+	if c.config.ApiTimeout == 0 {
+		c.config.ApiTimeout = apiTimeout
+	}
 
 	return c, nil
-}
-
-func (c *Client) applyConfig(config ClientConfig, normalize bool) {
-
-	if len(config.Model) > 0 {
-		c.model = config.Model
-	} else if normalize {
-		c.model = "gpt-3.5-turbo"
-	}
-
-	if config.ApiTimeout > 0 {
-		c.apiTimeout = config.ApiTimeout
-	} else if normalize {
-		c.apiTimeout = time.Minute * 2
-	}
-
-	if config.Temperature != nil {
-		// doc: https://github.com/sashabaranov/go-openai#frequently-asked-questions
-		if *config.Temperature == 0 {
-			c.temperature = 0.0000001
-		} else {
-			c.temperature = *config.Temperature
-		}
-	}
-
-	if config.TopP != nil {
-		c.topP = *config.TopP
-	} else if normalize {
-		c.topP = 1
-	}
-
-	c.maxTokens = config.MaxTokens
-
-	c.presencePenalty = config.PresencePenalty
-
-	c.frequencyPenalty = config.FrequencyPenalty
-
-	if len(config.LogitBias) > 0 {
-		c.logitBias = config.LogitBias
-	} else if normalize {
-		c.logitBias = make(map[string]int)
-	}
-
-	if config.MemoryMessageSize != nil {
-		c.memoryMessageSize = config.MemoryMessageSize
-	}
-
-	if config.MemoryTokenSize != nil {
-		c.memoryTokenSize = config.MemoryTokenSize
-	}
-
-	if config.ModeratePromptMessage != nil {
-		c.moderatePromptMessage = *config.ModeratePromptMessage
-	}
-
-	if config.ModerateResponse != nil {
-		c.moderateResponse = *config.ModerateResponse
-	}
 }
 
 // Clone a new chat client with an empty history
 func (c *Client) Clone() *Client {
 	return &Client{
-		client:                c.client,
-		history:               History{},
-		model:                 c.model,
-		apiTimeout:            c.apiTimeout,
-		temperature:           c.temperature,
-		topP:                  c.topP,
-		presencePenalty:       c.presencePenalty,
-		frequencyPenalty:      c.frequencyPenalty,
-		logitBias:             c.logitBias,
-		tokenizer:             c.tokenizer,
-		memoryTokenSize:       c.memoryTokenSize,
-		memoryMessageSize:     c.memoryMessageSize,
-		moderatePromptMessage: c.moderatePromptMessage,
-		moderateResponse:      c.moderateResponse,
+		client:  c.client,
+		history: History{},
+		config:  c.config,
 	}
 }
 
@@ -146,7 +69,12 @@ func (c *Client) Clone() *Client {
 // This method enables the modification of selected parameters from the source client's configuration.
 func (c *Client) CloneWithConfig(config ClientConfig) *Client {
 	cc := c.Clone()
-	cc.applyConfig(config, false)
+	cc.config = &config
+
+	if cc.config.ApiTimeout == 0 {
+		cc.config.ApiTimeout = apiTimeout
+	}
+
 	return cc
 }
 
@@ -154,8 +82,8 @@ func (c *Client) CloneWithConfig(config ClientConfig) *Client {
 // If length of the instruction exceeds the allowed context length of the underlying model, it returns an error.
 func (c *Client) Instruct(instruction string) error {
 
-	if c.tokenizer.CountTokens(instruction) > getModel(c.model).MaxInstructionLength() {
-		return fmt.Errorf("max length of instruction is %d", getModel(c.model).MaxInstructionLength())
+	if c.tokenizer.CountTokens(instruction) > getModel(c.config.ChatConfig.Model).MaxInstructionLength() {
+		return fmt.Errorf("max length of instruction is %d", getModel(c.config.ChatConfig.Model).MaxInstructionLength())
 	}
 
 	if len(c.history) == 0 { // insert
@@ -177,8 +105,8 @@ func (c *Client) Instruct(instruction string) error {
 // If length of the instruction exceeds the allowed context length of the underlying model, it trims the instruction to fit.
 func (c *Client) InstructWithLengthFix(instruction string) {
 
-	for c.tokenizer.CountTokens(instruction) > getModel(c.model).MaxInstructionLength() {
-		diffToken := c.tokenizer.CountTokens(instruction) - getModel(c.model).MaxInstructionLength()
+	for c.tokenizer.CountTokens(instruction) > getModel(c.config.ChatConfig.Model).MaxInstructionLength() {
+		diffToken := c.tokenizer.CountTokens(instruction) - getModel(c.config.ChatConfig.Model).MaxInstructionLength()
 		diffChar := diffToken * 3 // each token is roughly 3 latin characters
 		instruction = instruction[:len(instruction)-diffChar]
 	}
@@ -202,7 +130,7 @@ func (c *Client) InstructWithLengthFix(instruction string) {
 // if moderation flags are enabled and moderation fails, otherwise, it can be other types of errors from the underlying operations.
 func (c *Client) Prompt(ctx context.Context, prompt string) (string, error) {
 
-	if c.moderatePromptMessage {
+	if *c.config.ModeratePromptMessage {
 		err := c.moderateInput(ctx, prompt)
 		if err == ErrModeration {
 			return "", ErrModerationUserInput
@@ -228,7 +156,7 @@ func (c *Client) Prompt(ctx context.Context, prompt string) (string, error) {
 		return "", err
 	}
 
-	if c.moderateResponse {
+	if *c.config.ModerateResponse {
 		err := c.moderateInput(ctx, response)
 		if err == ErrModeration {
 			return "", ErrModerationModelOutput
@@ -256,7 +184,7 @@ func (c *Client) PromptStream(ctx context.Context, question string) <-chan Strea
 	go func() {
 		defer close(ch)
 
-		if c.moderatePromptMessage {
+		if *c.config.ModeratePromptMessage {
 			err := c.moderateInput(ctx, question)
 			if err == ErrModeration {
 				ch <- Stream{Err: ErrModerationUserInput}
@@ -269,7 +197,7 @@ func (c *Client) PromptStream(ctx context.Context, question string) <-chan Strea
 		}
 
 		req := c.newChatCompletionRequest(question, true)
-		ctx, cancel := context.WithTimeout(ctx, c.apiTimeout)
+		ctx, cancel := context.WithTimeout(ctx, c.config.ApiTimeout)
 		defer cancel()
 
 		stream, err := c.client.CreateChatCompletionStream(ctx, req)
@@ -323,7 +251,7 @@ func (c *Client) TotalConsumedTokens() int {
 func (c *Client) prompt(ctx context.Context, question string) (string, error) {
 
 	req := c.newChatCompletionRequest(question, false)
-	ctx, cancel := context.WithTimeout(ctx, c.apiTimeout)
+	ctx, cancel := context.WithTimeout(ctx, c.config.ApiTimeout)
 	defer cancel()
 	resp, err := c.client.CreateChatCompletion(ctx, req)
 	if err != nil {
@@ -351,14 +279,22 @@ func (c *Client) newChatCompletionRequest(question string, stream bool) ai.ChatC
 	c.trimHistory()
 
 	request := ai.ChatCompletionRequest{
-		Model:       c.model,
-		Messages:    c.history,
-		Temperature: c.temperature,
-		Stream:      stream,
-	}
-
-	if c.maxTokens > 0 {
-		request.MaxTokens = c.maxTokens
+		Model:            c.config.ChatConfig.Model,
+		Messages:         c.history,
+		Temperature:      c.config.ChatConfig.Temperature,
+		MaxTokens:        c.config.ChatConfig.MaxTokens,
+		TopP:             c.config.ChatConfig.TopP,
+		N:                c.config.ChatConfig.N,
+		Stop:             c.config.ChatConfig.Stop,
+		PresencePenalty:  c.config.ChatConfig.PresencePenalty,
+		ResponseFormat:   c.config.ChatConfig.ResponseFormat,
+		Seed:             c.config.ChatConfig.Seed,
+		FrequencyPenalty: c.config.ChatConfig.PresencePenalty,
+		LogitBias:        c.config.ChatConfig.LogitBias,
+		User:             c.config.ChatConfig.User,
+		Tools:            c.config.ChatConfig.Tools,
+		ToolChoice:       c.config.ChatConfig.ToolChoice,
+		Stream:           stream,
 	}
 
 	return request
@@ -367,16 +303,16 @@ func (c *Client) newChatCompletionRequest(question string, stream bool) ai.ChatC
 // Trim history to fit the maximum number of tokens or messages allowed.
 func (c *Client) trimHistory() {
 
-	if c.memoryTokenSize != nil {
-		c.trimHistoryToMatchTokenLimit(*c.memoryTokenSize)
+	if c.config.MemoryTokenSize != nil {
+		c.trimHistoryToMatchTokenLimit(*c.config.MemoryTokenSize)
 	}
 
-	if c.memoryMessageSize != nil {
+	if c.config.MemoryMessageSize != nil {
 		c.trimHistoryToMatchMessageLimit()
 	}
 
 	// to make sure that the remained context does not exceed the allowed model's context length
-	c.trimHistoryToMatchTokenLimit(getModel(c.model).ContextLength())
+	c.trimHistoryToMatchTokenLimit(getModel(c.config.ChatConfig.Model).ContextLength())
 }
 
 func (c *Client) trimHistoryToMatchTokenLimit(limit int) error {
@@ -416,7 +352,7 @@ func (c *Client) trimHistoryToMatchTokenLimit(limit int) error {
 }
 
 func (c *Client) trimHistoryToMatchMessageLimit() {
-	memorySize := *c.memoryMessageSize
+	memorySize := *c.config.MemoryMessageSize
 	// exclude instruction from the operation
 	if len(c.history)-1 <= memorySize {
 		return
