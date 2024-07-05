@@ -10,7 +10,7 @@ import (
 type (
 	History []ai.ChatCompletionMessage
 
-	ChatConfig = openai.ChatCompletionRequest
+	ChatConfig openai.ChatCompletionRequest
 
 	Stream struct {
 		Chunk string
